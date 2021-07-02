@@ -60,6 +60,35 @@ const uint32_t csPlayScoMask = 16;
 
 #define STA(x)   (csound->onefileStatics.x)
 
+/*
+ * Platform-indepdendent imitation of mkstemps, which uses the same basic 
+ * algorithm as POSIX mkstemps, but uses only platform-independent C library calls.
+ * 1. Create a temporary filepath, based on a template 
+ *    "[path/]csound-{random}[.extension]".
+ * 2. Create a file with that filepath. If the file exists, go back to step 
+ *    (1), but no more than 10 attempts will be made before dieing. This is done 
+ *    with the same flags and permissions as Linux mkstemps.
+ * 3. Return the file stream handle to the file.
+ */
+ 
+
+CS_NOINLINE FILE *csound_mkstemps(CSOUND *csound, const char *directory, const char *prefix, const char *extension) 
+{
+    FILE *result = 0;
+    char template_buffer[0x200];
+    char random_buffer[7];
+    int attempt_index;
+    int attempt_count = 10;
+    int character_index;
+    int character_count = 6;
+    if (strlen(directory) > 0) {
+        snprintf(template_buffer, "%s-%s%s"
+    } else {
+        snprintf(template_buffer, "
+    }
+    
+}
+
 CS_NOINLINE char *csoundTmpFileName(CSOUND *csound, const char *ext)
 {
 #define   nBytes (256)
@@ -625,8 +654,10 @@ static int createExScore(CSOUND *csound, char *p, CORFIL *cf)
     strNcpy(prog, p+5, 256); //prog[255]='\0';/* after "<CsExScore " */
     /* Generate score name */
     if (STA(sconame)) free(STA(sconame));
-    STA(sconame) = csoundTmpFileName(csound, ".sco");
-    extname = csoundTmpFileName(csound, ".ext");
+    //STA(sconame) = csoundTmpFileName(csound, ".sco");
+    //extname = csoundTmpFileName(csound, ".ext");
+    STA(sconame) = csoundTmpFileName(csound, "");
+    extname = csoundTmpFileName(csound, ".");
     fd = csoundFileOpenWithType(csound, &scof, CSFILE_STD, extname, "w", NULL,
                                 CSFTYPE_SCORE, 1);
     csound->tempStatus |= csScoInMask;
