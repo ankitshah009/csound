@@ -61,97 +61,70 @@ const uint32_t csPlayScoMask = 16;
 #define STA(x)   (csound->onefileStatics.x)
 
 /*
- * Platform-indepdendent imitation of mkstemps, which uses the same basic 
- * algorithm as POSIX mkstemps, but uses only platform-independent C library calls.
+ * Platform-indepdendent version of mkstemps, which uses the same basic 
+ * algorithm as POSIX mkstemp, implemented with completely platform- and 
+ * compiler-independent C library calls.
  * 1. Create a temporary filepath, based on a template 
- *    "[path/]csound-{random}[.extension]".
- * 2. Create a file with that filepath. If the file exists, go back to step 
- *    (1), but no more than 10 attempts will be made before dieing. This is done 
- *    with the same flags and permissions as Linux mkstemps.
- * 3. Return the file stream handle to the file.
+ *    "[path/]csond-{random}[.extension]".
+ * 2. Create a file from that filepath. If the file exists, go back to step 
+ *    (1), but no more than 10 attempts will be made before dieing. This is 
+ *    done with the same flags and permissions as Linux mkstemp.
+ * 3. Return the filepath of the temporary file on success, or an empty 
+ *    filepath on failure.
  */
  
+#define   nBytes (256)
 
-CS_NOINLINE FILE *csound_mkstemps(CSOUND *csound, const char *directory, const char *prefix, const char *extension) 
+static CS_NOINLINE int csound_mkstemps(char *filepath_buffer, const char *tmp_directory, const char *extension_) 
 {
-    FILE *result = 0;
-    char template_buffer[0x200];
+    int file_descriptor = 0;
     char random_buffer[7];
-    int attempt_index;
-    int attempt_count = 10;
-    int character_index;
-    int character_count = 6;
-    if (strlen(directory) > 0) {
-        snprintf(template_buffer, "%s-%s%s"
-    } else {
-        snprintf(template_buffer, "
+    char *extension = "";
+    const char *character_pool = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    int character_pool_count = strlen(character_pool);
+    for (int i = 0; i < 6; i++) {
+        random_buffer[i] = character_pool[rand() % character_pool_count];
     }
+    random_buffer[7] = '\0';
+    if (extension_ != NULL) {
+        extension = (char *)extension_;
+    }
+    snprintf(filepath_buffer, nBytes, "%s/csond-%s%s", tmp_directory, random_buffer, extension);
+    file_descriptor = open(filepath_buffer, O_RDWR | O_CREAT | O_EXCL, S_IRWXU | S_IRWXG | S_ISUID | S_ISGID);
+    if (file_descriptor < 0) {
+        filepath_buffer[0] = '\0';
+    }
+    return file_descriptor;
     
 }
 
 CS_NOINLINE char *csoundTmpFileName(CSOUND *csound, const char *ext)
 {
-#define   nBytes (256)
-    char lbuf[256];
-#if defined(WIN32) && !defined(__CYGWIN__)
-    struct _stat tmp;
-#else
-    struct stat tmp;
-#endif
-    do {
+    char lbuf[nBytes];
+    int fd = -1;
+    char *tmpdir = NULL;
 #ifndef WIN32
-      int fd;
-      char *tmpdir = getenv("TMPDIR");
-      if (tmpdir != NULL && tmpdir[0] != '\0')
-        snprintf(lbuf, nBytes, "%s/csound-XXXXXX", tmpdir);
-      else
-        strcpy(lbuf, "/tmp/csond-XXXXXX");
-      umask(0077);
-        /* ensure exclusive access on buggy implementations of mkstemp */
-      if (UNLIKELY((fd = mkstemp(lbuf)) < 0))
-        csound->Die(csound, Str(" *** cannot create temporary file"));
-      close(fd);
-      //unlink(lbuf);
+    tmpdir = getenv("TMPDIR");
+    if (tmpdir == NULL || tmpdir[0] == '\0') {
+      tmpdir = "/tmp";
+    }
+    //umask(0077);
 #else
-      {
-        char  *s = (char*) csoundGetEnv(csound, "SFDIR");
-        if (s == NULL)
-          s = (char*) csoundGetEnv(csound, "HOME");
-        s = _tempnam(s, "cs");
-        if (UNLIKELY(s == NULL))
-          csound->Die(csound, Str(" *** cannot create temporary file"));
-        strNcpy(lbuf, s, nBytes);
-        free(s);
-      }
+    tmpdir = (char*) csoundGetEnv(csound, "SFDIR");
+    if (tmpdir == NULL) {
+      tmpdir = (char*) csoundGetEnv(csound, "HOME");
+    }
 #endif
-      if (ext != NULL && ext[0] != (char) 0) {
-#if !defined(LINUX) && !defined(__MACH__) && !defined(WIN32)
-        char  *p;
-        /* remove original extension (does not work on OS X */
-        /* and may be a bad idea) */
-        if ((p = strrchr(lbuf, '.')) != NULL)
-          *p = '\0';
-#endif
-        strlcat(lbuf, ext, nBytes);
-      }
-#ifdef __MACH__
-      /* on MacOS X, store temporary files in /tmp instead of /var/tmp */
-      /* (suggested by Matt Ingalls) */
-      if (strncmp(lbuf, "/var/tmp/", 9) == 0) {
-        int i = 3;
-        do {
-          i++;
-          lbuf[i - 4] = lbuf[i];
-          } while (lbuf[i] != '\0');
-      }
-#endif
-#if defined(WIN32)
-    } while (_stat(lbuf, &tmp) == 0);
-#else
-      /* if the file already exists, try again */
-    } while (stat(lbuf, &tmp) == 0);
-#endif
-return cs_strdup(csound, lbuf);
+    for (int attempt = 0; attempt < 10; attempt++) {
+        fd = csound_mkstemps(lbuf, tmpdir, ext);
+        if (fd >= 0) {
+            break;
+        }
+    }
+    if (fd < 0) {
+       csound->Die(csound, Str(" *** cannot create temporary file"));
+    }
+    return cs_strdup(csound, lbuf);
 }
 
 static inline void alloc_globals(CSOUND *csound)
@@ -654,10 +627,8 @@ static int createExScore(CSOUND *csound, char *p, CORFIL *cf)
     strNcpy(prog, p+5, 256); //prog[255]='\0';/* after "<CsExScore " */
     /* Generate score name */
     if (STA(sconame)) free(STA(sconame));
-    //STA(sconame) = csoundTmpFileName(csound, ".sco");
-    //extname = csoundTmpFileName(csound, ".ext");
-    STA(sconame) = csoundTmpFileName(csound, "");
-    extname = csoundTmpFileName(csound, ".");
+    STA(sconame) = csoundTmpFileName(csound, ".sco");
+    extname = csoundTmpFileName(csound, ".ext");
     fd = csoundFileOpenWithType(csound, &scof, CSFILE_STD, extname, "w", NULL,
                                 CSFTYPE_SCORE, 1);
     csound->tempStatus |= csScoInMask;
@@ -707,7 +678,8 @@ static int createExScore(CSOUND *csound, char *p, CORFIL *cf)
         corfile_puts(csound, "\n#exit\n", csound->scorestr);
         corfile_putc(csound, '\0', csound->scorestr);
         corfile_putc(csound, '\0', csound->scorestr);
-        //corfile_rewind(csound->scorestr); /* necessary? */
+        /// //corfile_rewind(csound->scorestr); /* necessary? */
+        corfile_rewind(csound->scorestr); /* necessary? */
         csound->Free(csound, extname); //27363
         return TRUE;
       }
